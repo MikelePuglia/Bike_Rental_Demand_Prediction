@@ -1,0 +1,526 @@
+---
+title: "Bike Rental Demand Prediction"
+author: "Michele Puglia"
+date: "2024-02-24"
+output: 
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: journal
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Libraries
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+library(gridExtra)
+library(caret)
+library(car)
+library(ROCR)
+library(pROC)
+library(ggeffects)
+library(MASS)
+```
+
+# Introduzione
+
+Questo report si propone di illustrare la costruzione e applicazione di modelli lineari generalizzati (GLM) attraverso un esempio pratico. I GLM rappresentano un'estensione della classica regressione lineare, adattandosi a situazioni in cui la distribuzione della variabile risposta non segue la normale (ad esempio alla famiglia delle distribuzioni esponenziali) e consentendo l'analisi di relazioni più complesse tra le variabili rispetto al caso lineare.  
+Il progetto analizza la problematica relativa alla previsione della domanda di biciclette a noleggio in un contesto urbano. Per farlo, si utilizza la regressione di Poisson al fine di modellare il conteggio di biciclette noleggiate in funzione di variabili meteorologiche e temporali, supportando una gestione più efficiente del sistema di bike sharing.
+
+# Poisson regression
+
+Modello di regressione utilizzato per analizzare dati di conteggio ovvero, casi in cui la variabile dipendente è il numero di eventi che si verificano in un intervallo di tempo o in uno spazio specifico. In particolare, viene utilizza una funzione di regressione logaritmica per modellare il logaritmo naturale del valore atteso della variabile dipendente in funzione delle variabili indipendenti.
+
+## Dataset bike
+
+I dati sono stati acquisti acquisiti da UCI Machine Learning Repository (https://archive.ics.uci.edu/dataset/560/seoul+bike+sharing+demand) e riguardano il conteggio delle biciclette pubbliche noleggiate ogni ora, tra il 2017 e il 2018, nella città di Seoul. Inoltre, il dataset contiene anche altri tipi di informazioni relative a diversi fenomeni metereologici.
+Poichè nelle città urbane la diffusione delle biciclette a noleggio ha rivoluzionato la mobilità, fornendo un'alternativa flessibile, ecologica  e comoda ai mezzi tradizionali, una sfida importante è riuscire a gestire il sistema dei noleggi. In particolare, la costruzione di un modello efficiente potrebbe rivelarsi utile per riuscire a prevedere con precisione la domanda di biciclette al fine di supportare l'esperienza di mobilità urbana, ad esempio, riducendo i tempi di attesa, 
+
+I dati a disposizione (8760 osservazioni) si focalizzano sul conteggio di noleggi registrati e sui fattori che potrebbero influenzarne la quantità. In particolare, si fa riferimento a 14 variabili, tra cui:
+
+- **Date**: data in formato "anno-mese-giorno" ad indicare il giorno specifico a cui si riferiscono i dati.
+
+- **Rented Bike count**: Indica il numero di biciclette noleggiate in ogni ora specifica della giornata.
+
+- **Hour**: Rappresenta l'ora del giorno durante la quale sono stati registrati i dati sul noleggio delle biciclette.
+
+- **Temperature**: La temperatura ambiente in gradi Celsius al momento della registrazione dei dati.
+
+- **Humidity**: Percentuale di umidità nell'aria al momento della registrazione dei dati.
+
+- **Windspeed**: La velocità del vento misurata in metri al secondo (m/s).
+
+- **Visibility**: La visibilità in metri al momento della registrazione dei dati. Indica la distanza in metri fino alla quale eventuali ostacoli sono chiaramente visibili. Tale variabile può essere influenzate dalle condizioni atmosferiche.
+
+- **Dew point temperature**: La temperatura, misurata in gradi Celsius, che induce alla formazione di rugiada ovvero la situazione in cui l'aria si raffredda e l'umidità si condensa.
+
+- **Solar radiation**: La radazione solare presente, misurata in mega-joule per metro quadrato.
+
+- **Rainfall**: La quantità di pioggia misurata in millimetri.
+
+- **Snowfall**: L'ammontare della neve caduta misurato in centimetri.
+
+- **Seasons**: Indica la stagione di riferimento: Inverno, Primavera, Estate o Autunno.
+
+- **Holiday**: Indica se il giorno cade in corrispondenza di una festività o no.
+
+- **Functional Day**: Indica se il giorno è funzionale o non funzionale ovvero se si tratta di un giorno lavorativo 
+
+
+## Analisi descrittiva
+
+```{r, echo=FALSE, bike}
+bike <- read.csv("C:/Users/Michele Puglia/Desktop/GLM/SeoulBikeData.csv", header = TRUE)
+glimpse(bike)
+summary(bike)
+```
+
+## Pre-processing
+
+### Conversione di tipo
+Le variabili Seasons, Holiday e Functioning.Day vengono convertite in factor e considerate categoriali mentre la variabile Date viene impostata nel formato data (giorno, mese, anno)
+
+```{r, echo=FALSE, pre-proc}
+bike <- bike %>%
+  mutate(
+    Date = as.Date(Date, format = "%d/%m/%Y"),
+    Seasons = as.factor(Seasons),
+    Holiday = as.factor(Holiday),
+    Functioning.Day = as.factor(Functioning.Day)
+  )
+```
+
+### Controllo di eventuali valori mancanti
+
+```{r, echo=FALSE, na}
+anyNA(bike)
+```
+
+## Data visualization
+Rappresentazione grafica di alcune variabili di interesse al fine di ottenere delle informazioni utili.
+
+- **RentedBikeCount**:L'istogramma della variabile di conteggio evidenzia chiaramente la sua tendenza a seguire una distribuzione di Poisson, mostrando una forma a campana con una notevole asimmetria e una coda estesa a destra. Questa caratteristica si traduce in una frequenza significativamente più elevata nei valori di conteggio entro 500, con una graduale diminuzione della frequenza man mano che si procede verso valori più elevati
+
+```{r, echo=FALSE, count}
+ggplot(bike, aes(x = Rented.Bike.Count)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione noleggi",
+       x = "Conteggio",
+       y = "Frequenza") +
+  theme_minimal()
+```
+
+- **hour**: dalla distribuzione si può notare che, come ci si poteva aspettare, la  maggior parte dei dati sono rilevati tra nelle ore diurne. Rispetto al numero di noleggi è presente un picco in corrispondenza delle ore 18 mentre un altro valore alto si registra alle 8 di mattina. Questo potrebbe indicare tipici orari lavorativi.
+
+```{r, echo=FALSE, hour}
+hist_hour<-ggplot(bike, aes(x = Hour)) +
+  geom_histogram(binwidth = 3, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione ore",
+       x = "Conteggio",
+       y = "Frequenza") +
+  theme_minimal()
+
+hist_count_hour<-ggplot(bike, aes(x = Hour, y = Rented.Bike.Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Noleggi per Ora",
+       x = "Ora del Giorno",
+       y = "Numero di Noleggi") +
+  theme_minimal()
+
+grid.arrange(hist_hour, hist_count_hour, ncol=2)
+```
+
+
+- **season**: il barplot mostra il numero di noleggi registrati in relazione alle quattro stagioni dell'anno. Emerge una situazione abbastanza equilibrata in cui le frequenze relative all'estate e alla primavera riflettono un leggerissimo aumento del numero di noleggi 
+
+
+- **holiday**: il barplot di Holiday indica che in corrispondenza di giorni lavorativi (No holiday) il numero di noleggi è molto più elevato rispetto ai giorni di vacanza. Questo potrebbe indicare una tendenza ad usare il servizio di bike sharing per raggiungere i luoghi di lavoro.
+
+```{r, echo=FALSE, season-holiday}
+bp_season<-ggplot(bike, aes(x = Seasons)) +
+  geom_bar(fill = c("brown", "orange", "yellow", "steelblue"), alpha = 0.7) +
+  labs(title = "Noleggi per stagioni",
+       x = "Seasons",
+       y = "Count")
+
+bp_holiday<-ggplot(bike, aes(x = Holiday)) +
+  geom_bar(fill = c("steelblue", "orange"), alpha = 0.7) +
+  labs(title = "Noleggi per holiday",
+       x = "Holiday",
+       y = "Bici Noleggiate")
+
+grid.arrange(bp_season, bp_holiday, ncol=2)
+```
+
+- **temperature**:  La forma dell’istogramma è quasi simmetrica, con un picco attorno ai 20 gradi Celsius. Inoltre, dallo scatterplot si può osservare che all’aumentare della temperatura, aumenta anche il numero dei noleggi di biciclette. In altre parole, c’è una correlazione positiva tra le due variabili.
+
+- **humidity**: la distribuzione sembra essere quasi simmetrica, con un picco intorno al valore di umidità tra il 50% e il 75%. Considerando lo scatterplot si conferma che le maggiori registrazioni avvengono in corrispondenza di valori di umidità media.
+
+```{r, echo=FALSE, temp-hum}
+
+#temp
+hist_temp<-ggplot(bike, aes(x = Temperature)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione temperature",
+       x = "Temperature",
+       y = "Frequenza") +
+  theme_minimal()
+
+
+sp_temp_bike<-ggplot(bike, aes(x = Temperature, y = Rented.Bike.Count, color = Temperature)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Scatterplot temperatura-noleggi",
+       x = "Temperatura",
+       y = "Numero di noleggi") +
+  scale_color_gradient(low = "steelblue", high = "orange") +  # Imposta i colori di gradiente
+  theme_minimal()
+
+grid.arrange(hist_temp, sp_temp_bike, ncol=2)
+
+#hum
+hist_hum<-ggplot(bike, aes(x = Humidity)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione umidità",
+       x = "Umidità",
+       y = "Frequenza") +
+  theme_minimal()
+
+sp_hum_bike<-ggplot(bike, aes(x = Humidity, y = Rented.Bike.Count, color = Humidity)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Scatterplot umidità-noleggi",
+       x = "Umidità",
+       y = "Numero di noleggi") +
+  scale_color_gradient(low = "steelblue", high = "orange") + 
+  theme_minimal()
+
+grid.arrange(hist_hum, sp_hum_bike, ncol=2)
+```
+
+- **windspeed**: la velocità del vento indica una distribuzione asimmetrica a destra perciò i valori maggiormente presenti riguardano casi di vento debole (tra 0 e 2 metri al secondo) per poi diminuire progressivamente. In generale, si può dire che in presenza di vento abbastanza forte si preferisce non utilizzare il servizio di bike sharing.
+
+- **visibility**: come si può evincere dallo scatter plot si potrebbe decidere di noleggiare delle bici quando la visibilità aumenta ovvero quando è possibile utilizzare il servizio in situazioni di maggiore sicurezza. In particolare si hanno valori di visibilità misurati in metri con un picco in corrispondenza dei 2000 metri (2km).
+
+```{r, echo=FALSE, windsp-visib}
+
+#wind
+hist_wind<-ggplot(bike, aes(x = Wind.speed)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione velocità vento",
+       x = "Velocità del vento",
+       y = "Frequenza") +
+  theme_minimal()
+
+
+sp_wind_bike<-ggplot(bike, aes(x = Wind.speed, y = Rented.Bike.Count, color = Wind.speed)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Scatterplot vento-noleggi",
+       x = "vento",
+       y = "Numero di noleggi") +
+  scale_color_gradient(low = "steelblue", high = "orange") + 
+  theme_minimal()
+
+grid.arrange(hist_wind, sp_wind_bike, ncol=2)
+
+#visibility
+hist_vis<-ggplot(bike, aes(x =Visibility)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione visibilità",
+       x = "visibilità",
+       y = "Frequenza") +
+  theme_minimal()
+
+sp_vis_bike<-ggplot(bike, aes(x = Visibility, y = Rented.Bike.Count, color = Visibility)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Scatterplot visibilità-noleggi",
+       x = "visibilità",
+       y = "Numero di noleggi") +
+  scale_color_gradient(low = "steelblue", high = "orange") + 
+  theme_minimal()
+
+grid.arrange(hist_vis, sp_vis_bike, ncol=2)
+```
+
+
+- **rainfall** e **snowfall**: i grafici riferiti alle variabili Rainfall e Snowfall sono abbastanza simili perchè indicano entrambi che nella città di Seoul, nel periodo analizzato, sono stati registrati dei bassi livelli di pioggia e di neve. Questo naturalmente incide sulla distribuzione dei dati che infatti mostrano un picco in corrispondenza di valori molto bassi. In ogni caso, si può dire che all'aumentare del livello di pioggia e di neve il numero di noleggi tende a diminuire.
+
+```{r, echo=FALSE, rain-snow}
+
+#rain
+hist_rain<-ggplot(bike, aes(x = Rainfall)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione pioggia",
+       x = "Pioggia",
+       y = "Frequenza") +
+  theme_minimal()
+
+sp_rain_bike<-ggplot(bike, aes(x = Rainfall, y = Rented.Bike.Count, color = Rainfall)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Scatterplot pioggia-noleggi",
+       x = "pioggia",
+       y = "Numero di noleggi") +
+  scale_color_gradient(low = "steelblue", high = "orange") + 
+  theme_minimal()
+
+
+grid.arrange(hist_rain, sp_rain_bike, ncol=2)
+
+#snow
+hist_snow<-ggplot(bike, aes(x =Snowfall)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribuzione neve",
+       x = "neve",
+       y = "Frequenza") +
+  theme_minimal()
+
+sp_snow_bike<-ggplot(bike, aes(x = Snowfall, y = Rented.Bike.Count, color = Snowfall)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Scatterplot neve-noleggi",
+       x = "neve",
+       y = "Numero di noleggi") +
+  scale_color_gradient(low = "steelblue", high = "orange") + 
+  theme_minimal()
+
+grid.arrange(hist_snow, sp_snow_bike, ncol=2)
+```
+
+
+## Analisi della correlazione
+Misura del grado di relazione lineare tra le variabili presenti nel dataset.
+Il corrplot indica la presenza di una serie di correlazioni rilevanti, tra cui:
+
+- **dewpointTemperature**: Sono presenti due correlazioni importanti rispetto alla variaile dewpoint. Rispetto alla temperatura è presente una correlazione positiva molto forte (0.91) giustificabile dal fatto che temperature più elevate possono portare a tassi di evaporazione più alti. Al contempo, questo aumento di vapore comporta anche un aumento di umidità e infatti la correlazione tra umidità e dewpointTemperature è anch'essa positiva e pari a 0.54.
+
+- **humidity**:  si può notare una correlazione negativa (-0.54) tra umidità e visibilità, indicando una diminuzione di visibilità causata dall'aumento di umidità dell'aria.
+Inoltre, rispetto a solarRadiation, la correlazione negativa pari a -0.46 indica che all'aumentare dell'umidità diminuisce l'intensità delle radiazioni solari.
+
+
+```{r, echo=FALSE, correl}
+numeric_data <- bike %>%
+  select_if(is.numeric)
+
+corrplot(cor(numeric_data), type = "upper", tl.srt = 45, tl.cex = 0.7, method = "number")
+
+```
+
+In base alle informazioni ottenute dal corrplot, si è scelto di visualizzare graficamente le relazioni in un pairsplot. Sono state considerate le variabili per cui gli indici di correlazione sono i più elevati ovvero Dew.point.temperature, Temperature e Humidity. Gli scatterplot risultanti confermano che in entrambi i casi una è presente
+relazione crescente tra i dati, più forte per la temperatura mentre si può notare una maggiore dispersione per l'umidità. 
+
+```{r, echo=FALSE, analisi_cor}
+pairs(bike[, c("Temperature", "Dew.point.temperature", "Humidity")])
+```
+
+
+## Splitting data
+
+Inizilamente, si decide di escludere la variabile Date dal dataset originale perchè potrebbe comportare delle problematiche nei modelli. In ogni caso, le informazioni relative a fattori temporali possono essere analizzate già con le variabili Hour e Seaosons. 
+Successivamente, i dati vengono separati in train e test set.
+
+```{r, echo=FALSE, Split_data}
+bike <- subset(bike, select = -Date) 
+
+set.seed(1)
+index<-createDataPartition(bike$Rented.Bike.Count, p=0.7)
+train_set=bike[index$Resample1,]
+test_set=bike[-index$Resample1,]
+
+```
+Il train set conterrà il 70% dei dati
+```{r, echo=FALSE, train_set}
+dim(train_set)
+```
+Il test set conterrà il 30% dei dati
+```{r, echo=FALSE, test_set}
+dim(test_set)
+```
+
+## Poisson models
+
+Costruzione del modello GLM. In questo caso la variabile dipendente è un conteggio e quindi occorre una regressione di Poisson con l'obiettivo di predire il numero di biciclette noleggiate in base a diversi fattori. Questo modello è detto anche log-lineare  perchè prevede la trasformazione logaritmica del valore atteso della variabile di risposta.
+Nella costruzione del primo modello si decide di escludere la variabile Functioning.Day perchè ha classi molto sbilanciate (97% dei dati Yes e solo il 3% No).
+
+I risultati indicano che tutte le variabili considerate sono altamente significative ovvero ogni variabile contribuisce in modo significativo alla previsione del conteggio di biciclette noleggiate. 
+Come per i modelli di regressione logistica, i coefficienti ottenuti indicano la variazione percentuale ma in questo caso rispetto al logaritmo del valore atteso della variabile risposta per un aumento unitario nella variabile indipendente corrispondente, mantenendo costanti tutte le altre variabili.
+
+```{r, echo=FALSE, poi2}
+bike.fit.poi <- glm(Rented.Bike.Count ~ .- Functioning.Day,
+                    data=train_set, 
+                    family=poisson(log))
+
+summary(bike.fit.poi)
+```
+
+Dopo aver ottenuto il primo modello, si procede a costruire un nuovo modello in cui si esclude la variabile Dew.point.temperature per capire se questo può indurre ad un miglioramento delle performance. 
+Effettuando il confronto tra i modelli tramite il test LRT si può notare un p-value minore di 0.05 e quindi si conclude che i modelli non risultano equivalenti. In questi casi si decide che il modello migliore è quello completo ovvero senza l'esclusione della variabile dew.point.temperature.
+ 
+
+```{r, echo=FALSE, poi3}
+bike.fit.poi2 <- glm(Rented.Bike.Count ~.-Dew.point.temperature-Functioning.Day,
+                    data=train_set, 
+                    family=poisson(log))
+```
+
+Anche i criteri AIC e BIC confermano questa decisione perchè mostrano dei valori più bassi in corrispondenza del modello bike.fit.poi
+ 
+```{r, echo=FALSE, criteri_poi3}
+anova(bike.fit.poi,bike.fit.poi2, test="LRT")
+
+BIC(bike.fit.poi,bike.fit.poi2)  
+AIC(bike.fit.poi,bike.fit.poi2)
+```
+
+
+### Coefficienti
+I coefficienti positivi indicano un aumento delle probabilità di noleggio, mentre quelli negativi suggeriscono una diminuzione. Inoltre, la dimensione dei coefficienti indica quanto forte sia tale effetto. In questo caso, possiamo dire che: per un aumento di un'unità nell'ora del giorno, il logaritmo del valore atteso della variabile risposta  aumenta del 4.6% mentre per un aumento di un'unità nella quantità di neve, il logaritmo del valore atteso della variabile risposta diminuisce del 9.2%. Inoltre, l'umidità e le radiazioni solari mostrano relazioni negative significative con i noleggi di biciclette (rispettivamente 1,3% e 5.9%), le diverse stagioni influenzano notevolmente i noleggi di biciclette, con l'inverno mostrando la più grande diminuzione rispetto invece all'autunno. Infine, durante le vacanze si osserva un aumento significativo nei noleggi di biciclette (3.2%).
+
+```{r, echo=FALSE, coefpoi}
+(exp(coef(bike.fit.poi))-1)*100
+```
+
+### Marginal effects
+Rispetto al datatset in uso, è possibile verificare l'effetto delle variabili sulla variabile risposta Rented.Bike.Count
+
+Considerando un aumento unitario di hour tra le 8 e le 16 è possibile notare un aumento anche dei noleggi. Ad esempio, in corrispondenza delle ore 12 il valore di predicted è 536.76 (con un intervallo di confidenza tra 533.78 e 539.76) mentre per un aumento unitario alle ore 13 il predicted aumenta a 561.61 (con un intervallo di confidenza tra 558.49 e 564.74). Graficamente, è possibile notare la relazione positiva tra ore e probabilità di noleggi e i relativi intervalli di confidenza.
+
+Successivamente sono stati analizzati gli effetti marginali rispetto ad aumenti unitari di temperatura. Anche in questo caso è mostrata una relazione positiva.
+
+```{r, echo=FALSE, me_hour&temp}
+pred.hour<-ggpredict(bike.fit.poi, "Hour[8:16]")
+me_hour<-plot(pred.hour)
+
+pred.temp<-ggpredict(bike.fit.poi, "Temperature[-5:30]")
+me_temp<-plot(pred.temp)
+
+grid.arrange(me_hour, me_temp, ncol=2)
+
+```
+
+Inoltre, sono stati analizzati gli effetti marginali per aumenti unitari dei livelli di pioggia considerando valori medio-bassi (da 0 a 5) e condizionando i risultati in base alla variabile binaria Holiday. I valori di predict, in linea con il grafico, indicano che esiste una relazione negativa tra le due variaili con dei valori di noleggi maggiori in caso di No Holiday.
+
+```{r, echo=FALSE, me_hour-temp}
+pred.r_h<-ggpredict(bike.fit.poi, c("Rainfall[0:5]", "Holiday"))
+plot(pred.r_h)
+```
+
+Infine, sono stati considerati gli effetti marginali rispetto alla variabile Dew.point.temperature, in corrispondenza di aumenti unitari dai 10 a 20 gradi Celsius. Ad esempio, è possibile notare un aumento pari a 9 noleggi in più passando dai 14 ai 15 gradi. 
+
+```{r, echo=FALSE, me_tot}
+pred.dewpoint<-ggpredict(bike.fit.poi, "Dew.point.temperature[10:20]")
+plot(pred.dewpoint)
+```
+
+## Negative binomial models
+
+Il modello di regressione negativo binomiale è spesso utilizzato quando la variabilità della variabile di risposta è maggiore di quanto previsto da un modello di Poisson ovvero la varianza non coincide più la media (come per la Poisson) bensì risulta maggiore. Quindi rappresenta un'alternativa particolarmente utile per modellare dati di conteggio in presenza di una sovradispersione.
+
+```{r, echo=FALSE, split_nb}
+
+set.seed(123)
+idx2<-createDataPartition(bike$Rented.Bike.Count, p=0.7)
+train_nb=bike[idx2$Resample1,]
+test_nb=bike[idx2$Resample1,]
+```
+
+Costruzione di un primo modello glm.nb (bike.fit.nb) in cui si considerano tutte le variabili. Tale modello indica che solo alcune risultano significative e quindi è stato creato un secondo modello (bike.fit.nb2) in cui sono state escluse le variabili: Visibility, SolarRadation e Functioning.Day
+
+```{r, echo=FALSE, nb}
+
+bike.fit.nb <- glm.nb(Rented.Bike.Count ~ Wind.speed + Hour + Humidity + Visibility +
+                        Dew.point.temperature + Snowfall + Seasons + Holiday + Solar.Radiation +
+                        Functioning.Day + Temperature,
+                    data = train_nb)
+
+summary(bike.fit.nb)
+
+bike.fit.nb2<- glm.nb(Rented.Bike.Count ~ Wind.speed + Hour + Humidity  +
+                        Dew.point.temperature + Snowfall + Seasons + Holiday  +
+                        Temperature,
+                        data=train_nb)
+```
+
+Dal confronto dei due modelli tramite test ANOVA e criteri AIC e BIC, si può concludere che il primo modello (bike.fit.nb) ha delle performance migliori
+
+```{r, echo=FALSE, anova_criteri}
+anova(bike.fit.nb, bike.fit.nb2)
+
+AIC(bike.fit.nb,bike.fit.nb2) 
+BIC(bike.fit.nb,bike.fit.nb2)
+```
+
+### Coefficienti
+
+Dall'analisi dei coefficienti si può dire che: coefficienti positivi (come Hour, HolidayNo Holiday) suggeriscono una relazione positiva con la variabile di risposta, mentre coefficienti negativi (come Wind.speed, Humidity) indicano una relazione negativa. Ad esempio, in termini di magnitudo, si può osservare che la variabile Snowfall indica una diminuzione del 5.9%, Humidity del 2.8% mentre la variabile Dew.point.temperature indica un aumento del 6.2%.
+
+```{r, echo=FALSE, coef_nb}
+(exp(coef(bike.fit.nb))-1)*100
+```
+
+
+## Modello migliore: confronto tra Poisson e Binomial negative
+
+Una volta scelto il modello più performante sia per la Poisson che per la Binomiale Negativa, si può effettuare un ultimo confronto per capire quale modello di regressione risulta il più adatto ai dati a disposizione. Tale comparazione, basata sui criteri AIC e BIC,  indica che tra i due metodi il migliore corrisponde a quello in cui è stata utilizzata la Binomiale Negativa (bike.fit.nb).
+
+```{r, echo=FALSE, poi_nb}
+AIC(bike.fit.poi, bike.fit.nb)
+BIC(bike.fit.poi, bike.fit.nb)
+
+```
+
+
+### Predictions
+Considerando tale modello è possibile eseguire delle previsioni in relazioni di nuovi dati.
+
+Nel primo caso sono stati considerati  gli stessi valori per tutte le variabili ad esclusione di season al fine di analizzare in che modo cambia il numero di noleggi in base al periodo dell'anno. Si può notare che, in base a questi specifici valori, il numero di noleggi più elevato è in autunno seguito da primavera ed estate mentre diminuiscono in notevolemnte in inverno.
+
+```{r, echo=FALSE, pred_nb}
+
+new.bikers <- data.frame(
+  Hour = rep(14, 4),
+  Temperature = rep(20, 4),
+  Humidity = rep(60, 4),
+  Wind.speed = rep(2.8, 4),
+  Visibility = rep(1500, 4),
+  Dew.point.temperature = rep(10, 4),
+  Solar.Radiation = rep(2.9, 4),
+  Snowfall = rep(0, 4),
+  Seasons = rep(levels(bike$Seasons)[1:4], each = 1), 
+  Holiday = rep(levels(bike$Holiday)[1], 4),
+  Functioning.Day = rep(levels(bike$Functioning.Day)[2], 4)
+)
+
+
+predict(bike.fit.nb, newdata = new.bikers, type = "response") 
+```
+
+Nel secondo caso si considerano caratteristiche identiche in corrispondenza di quattro diverse velocità del vento. L'obiettivo è predire il numero di noleggi in base alla variabile wind.speed. Si nota che la relazione negativa tra le due variabili, ad esempio, per velocità del vento pari a 1.5 m/s sono presenti 1360 noleggi mentre velocità di 4.5 m/s diminuiscono a 1269.
+
+```{r, echo=FALSE, pred_nb3}
+new.bikers3 <- data.frame(
+  Hour = rep(17, 4),
+  Temperature = rep(14, 4),
+  Humidity = rep(60, 4),
+  Wind.speed = rep(1.5:5, each = 1.3),
+  Visibility = rep(1200, 4),
+  Dew.point.temperature = rep(15, 4),
+  Solar.Radiation = rep(1.2, 4),
+  Snowfall = rep(0, 4),
+  Seasons = rep(levels(bike$Seasons)[1], 4),
+  Holiday = rep(levels(bike$Holiday)[1], 4),
+  Functioning.Day = rep(levels(bike$Functioning.Day)[2], 4)
+)
+
+predict(bike.fit.nb, newdata = new.bikers3, type = "response") 
+```
+
+
+
+## Conclusion
+L'obiettivo, anche in questa seconda analisi, è sfruttare le conoscenze acquisite riguardo ai Modelli Lineari Generalizzati (GLM) per sviluppare un modello affidabile rispetto alle previsioni. In questo caso, si fa riferimento ad un dataset differente in cui sono presenti dei valori di conteggio di noleggi di biciclette in un determinato intervallo di tempo. Per questo motivo, il modello di regressione individuato corrisponde alla regressione di Poisson o Negativa binomiale.
+Innanzitutto, è stata effettuata anche per questo dataset un' analisi descrittiva e grafica dei dati per poi costruire i modelli di riferimento. In questo caso, dapprima è stato scelto il GLM migliore relativo alla famiglia Poisson, dopodichè si è analizzato in relazione alla regressione Negativa Binomiale. Rispetto ai modelli di Poisson si può concludere che il modello migliore risulta quello che considera tutte le variabili senza alcuna esclusione. Allo stesso tempo però, si ottengono dei miglioramenti e delle performance miglori quando si passa alla Negativa Binomiale. Questo aspetto induce a pensare che siamo in presenza di overdispersion ovvero si osserva una maggiore dispersione nei dati rispetto a quanto previsto dalla distribuzione di Poisson, quindi la varianza risulta maggiore della media.
+Una volta scelto il modello migliore, sono stae condotte delle previsioni per valutare i risultati rispetto a dati diversi d quelli di train.
+In particolare, il modello indica che i noleggi sembrano essere preferiti in autunno e primavera, in corrispondenza delle ore 8 e delle ore 18 e di temperature elevate ma non eccessive. Inoltre, si ha un conteggio maggiore durante i giorni lavorativi rispetto a quelli di vacanza. Tuttò ciò può far pensare che la richiesta di biciclette a noleggio sia effettuata prevalentemente da persone che devono raggiungere la propria postazione di lavoro. Naturalmente, scaturisce che condizioni metereologiche avverse come la presenza di neve o forte vento disincetivano i noleggi.

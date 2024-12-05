@@ -1,6 +1,6 @@
 # Bike-Rental-Demand-Prediction
 
-![Bike Sharing](https://your-image-link-here.com/example.png)
+![image](https://github.com/user-attachments/assets/48a86775-f0e8-4144-96db-b5ef49d9a3f6)
 
 **Introduction**
 
